@@ -1,0 +1,9 @@
+store_id,store_name,city,region,opened_date
+ST001,Koramangala Flagship,Bengaluru,South,2019-03-14
+ST002,Indiranagar 100ft Rd,Bengaluru,South,2020-07-02
+ST003,Bandra Linking Road,Mumbai,West,2018-11-20
+ST004,Powai Hiranandani,Mumbai,West,2021-01-11
+ST005,Connaught Place,Delhi,North,2017-05-30
+ST006,Cyber Hub Gurugram,Delhi,North,2022-02-18
+ST007,Park Street,Kolkata,East,2020-09-09
+ST008,Banjara Hills,Hyderabad,South,2023-04-25
