@@ -9,7 +9,7 @@ from pathlib import Path
 
 random.seed(42)
 
-BASE = Path(__file__).parent / "data"
+BASE = Path.cwd() / "data"
 LANDING = BASE / "landing" / "orders"
 REF = BASE / "reference"
 LANDING.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # 01 · Auto Loader + Structured Streaming
 # MAGIC
@@ -167,31 +171,178 @@ display(dbutils.fs.ls(f"{SCHEMA_LOC}/bronze/_schemas"))
 
 # COMMAND ----------
 
-agg = (
-    spark.readStream
-        .format("cloudFiles")
-        .option("cloudFiles.format", "json")
-        .option("cloudFiles.schemaLocation", f"{SCHEMA_LOC}/agg")
-        .option("cloudFiles.inferColumnTypes", "true")
-        .option("cloudFiles.schemaEvolutionMode", "rescue")   # never fail this one
-        .option("cloudFiles.maxFilesPerTrigger", 1)           # one file per micro-batch
-        .load(ORDERS)
-        .withColumn("order_ts", F.col("order_ts").cast("timestamp"))
-        .withWatermark("order_ts", "1 day")
-        .groupBy(F.window("order_ts", "1 day"), "channel")
-        .agg(F.count("*").alias("orders"),
-             F.round(F.sum("order_total"), 2).alias("revenue"))
-        .select(F.col("window.start").cast("date").alias("order_date"),
-                "channel", "orders", "revenue")
+import time
+from datetime import datetime
+
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+    DoubleType
 )
 
-live = (agg.writeStream
-          .format("memory")
-          .queryName("live_channel_sales")
-          .outputMode("complete")
-          .option("checkpointLocation", f"{CHECKPOINT}/agg")
-          .trigger(processingTime="10 seconds")
-          .start())
+# ---------------------------------------------------------
+# 1. Create completely fresh locations for every demo
+# ---------------------------------------------------------
+
+RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+BASE_ORDERS = ORDERS.rstrip("/")
+
+DEMO_INBOX = f"{BASE_ORDERS}_live_demo/{RUN_ID}"
+DEMO_SCHEMA_LOC = f"{SCHEMA_LOC}/live_demo/{RUN_ID}"
+DEMO_CHECKPOINT = f"{CHECKPOINT}/live_demo/{RUN_ID}"
+
+TARGET_TABLE = "live_channel_sales_demo"
+
+dbutils.fs.mkdirs(DEMO_INBOX)
+
+print("Fresh live inbox:", DEMO_INBOX)
+
+
+# ---------------------------------------------------------
+# 2. Files that will arrive during the demonstration
+# ---------------------------------------------------------
+
+FILES_TO_ARRIVE = [
+    (
+        f"{BASE_ORDERS}/orders_2026_08_04.json",
+        "orders_2026_08_04_live.json"
+    ),
+    (
+        f"{BASE_ORDERS}/orders_2026_08_05.json",
+        "orders_2026_08_05_live.json"
+    )
+]
+
+
+# ---------------------------------------------------------
+# 3. Provide schema because the live inbox starts empty
+# ---------------------------------------------------------
+
+order_schema = StructType([
+    StructField("order_ts", StringType(), True),
+    StructField("channel", StringType(), True),
+    StructField("order_total", DoubleType(), True)
+])
+
+
+# ---------------------------------------------------------
+# 4. Define Auto Loader aggregation
+# ---------------------------------------------------------
+
+agg_demo = (
+    spark.readStream
+         .format("cloudFiles")
+         .option("cloudFiles.format", "json")
+         .option("cloudFiles.schemaLocation", DEMO_SCHEMA_LOC)
+         .option("cloudFiles.schemaEvolutionMode", "rescue")
+         .option("cloudFiles.maxFilesPerTrigger", 1)
+         .schema(order_schema)
+         .load(DEMO_INBOX)
+
+         .withColumn(
+             "order_ts",
+             F.col("order_ts").cast("timestamp")
+         )
+
+         # Prevent incorrect dates such as 2099
+         .filter(
+             (F.col("order_ts") >= F.to_timestamp(
+                 F.lit("2026-08-01 00:00:00")
+             )) &
+             (F.col("order_ts") < F.to_timestamp(
+                 F.lit("2026-09-01 00:00:00")
+             ))
+         )
+
+         .withWatermark("order_ts", "1 day")
+
+         .groupBy(
+             F.window("order_ts", "1 day"),
+             "channel"
+         )
+
+         .agg(
+             F.count("*").alias("orders"),
+             F.round(F.sum("order_total"), 2).alias("revenue")
+         )
+
+         .select(
+             F.col("window.start").cast("date").alias("order_date"),
+             "channel",
+             "orders",
+             "revenue"
+         )
+)
+
+
+# ---------------------------------------------------------
+# 5. Persist every updated aggregation
+# ---------------------------------------------------------
+
+def save_demo_aggregation(batch_df, batch_id):
+
+    (batch_df.write
+             .format("delta")
+             .mode("overwrite")
+             .option("overwriteSchema", "true")
+             .saveAsTable(TARGET_TABLE)
+    )
+
+
+# ---------------------------------------------------------
+# 6. Simulate files arriving one by one
+# ---------------------------------------------------------
+
+print("\nLive simulation started...")
+
+for file_number, (staged_file, filename) in enumerate(
+    FILES_TO_ARRIVE,
+    start=1
+):
+
+    print(f"\nWaiting for file {file_number} to arrive...")
+    time.sleep(10)
+
+    destination = f"{DEMO_INBOX}/{filename}"
+
+    # This represents an external system uploading a new file
+    dbutils.fs.cp(staged_file, destination)
+
+    print(f"New file arrived: {filename}")
+
+    query = (
+        agg_demo.writeStream
+                .outputMode("complete")
+                .foreachBatch(save_demo_aggregation)
+                .option(
+                    "checkpointLocation",
+                    DEMO_CHECKPOINT
+                )
+                .trigger(availableNow=True)
+                .start()
+    )
+
+    query.awaitTermination()
+
+    input_rows = sum(
+        (progress.get("numInputRows") or 0)
+        for progress in (query.recentProgress or [])
+    )
+
+    print(f"Rows processed: {input_rows}")
+    print("Updated live aggregation:")
+
+    (spark.table(TARGET_TABLE)
+          .orderBy(
+              F.col("order_date").desc(),
+              F.col("revenue").desc()
+          )
+          .show(truncate=False)
+    )
+
+print("\nLive file-arrival simulation completed.")
 
 # COMMAND ----------
 
