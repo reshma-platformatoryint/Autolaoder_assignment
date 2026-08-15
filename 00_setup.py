@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # 00 · Setup — Catalog, Schema, Volumes
 # MAGIC
@@ -19,10 +23,6 @@ ORDERS    = f"{BASE}/orders"          # Auto Loader source directory
 REFERENCE = f"{BASE}/reference"       # static dimension CSVs
 CHECKPOINT= f"{BASE}/_checkpoints"    # streaming checkpoints (notebook 01 only)
 SCHEMA_LOC= f"{BASE}/_schemas"        # Auto Loader inferred-schema store
-
-spark.conf.set("demo.catalog", CATALOG)
-spark.conf.set("demo.schema", SCHEMA)
-spark.conf.set("demo.orders_path", ORDERS)
 
 print(f"Landing zone : {ORDERS}")
 
@@ -90,9 +90,13 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.stores"))
 
 # COMMAND ----------
 
-# dbutils.fs.rm(CHECKPOINT, True)
-# dbutils.fs.rm(SCHEMA_LOC, True)
-# spark.sql(f"DROP SCHEMA IF EXISTS {CATALOG}.{SCHEMA}_pipeline CASCADE")
-# for t in ["bronze_orders_raw","orders_by_channel"]:
-#     spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.{SCHEMA}.{t}")
-# print("reset done")
+dbutils.fs.rm(CHECKPOINT, True)
+dbutils.fs.rm(SCHEMA_LOC, True)
+spark.sql(f"DROP SCHEMA IF EXISTS {CATALOG}.{SCHEMA}_pipeline CASCADE")
+for t in ["bronze_orders_raw","orders_by_channel"]:
+     spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.{SCHEMA}.{t}")
+     print("reset done")
+
+# COMMAND ----------
+
+spark.sql("DROP SCHEMA IF EXISTS main.qsr_demo_pipeline CASCADE")
